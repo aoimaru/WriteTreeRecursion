@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strings"
 )
@@ -35,6 +37,15 @@ func (fs FileStatus) AsByte() []byte {
 	buffer = append(buffer, fs.Hash[0:20]...)
 
 	return buffer
+}
+
+func (fs FileStatus) GetType() string {
+	if _, err := os.Stat(fs.Name); err != nil {
+		return "blob"
+	} else {
+		return "tree"
+	}
+
 }
 
 func Press(buffer []byte) []uint8 {
@@ -95,15 +106,64 @@ func Walk(tree *Tree, log string) {
 	}
 }
 
-func Compress() (hash string) {
-
+func Compress(buffer []byte) []uint8 {
+	var compressed bytes.Buffer
+	zlib_writer := zlib.NewWriter(&compressed)
+	zlib_writer.Write(buffer)
+	zlib_writer.Close()
+	return compressed.Bytes()
 }
 
 func Walking(tree *Tree) (hash string) {
+	buffer := make([]byte, 0)
+	// buffer = append(buffer, []byte("tree")...)
+	header := []byte{116, 114, 101, 101, 32, 51, 53, 51}
+	buffer = append(buffer, header...)
+	// buffer = append(buffer, 0)
+
 	for _, child_tree := range (*tree).Children {
-		child_hash := Walking(child_tree)
-		print(child_hash)
+		file_status, _ := GetFileStatus((*child_tree).Path)
+		entry_buffer := make([]byte, 0)
+		entry_buffer = append(entry_buffer, 0)
+		if file_status.GetType() == "blob" {
+			entry_buffer = append(entry_buffer, []byte("100644"+" ")...)
+			entry_buffer = append(entry_buffer, []byte(file_status.Name+" ")...)
+			// entry_buffer = append(entry_buffer, 0)
+			entry_buffer = append(entry_buffer, file_status.Hash[0:20]...)
+		} else {
+			entry_buffer = append(entry_buffer, []byte("40000"+" ")...)
+			entry_buffer = append(entry_buffer, []byte(file_status.Name+" ")...)
+			// entry_buffer = append(entry_buffer, 0)
+			child_hash := Walking(child_tree)
+			entry_buffer = append(entry_buffer, []byte(child_hash)...)
+
+		}
+		buffer = append(buffer, entry_buffer...)
 	}
+	compressed_buffer := Compress(buffer)
+	sha1 := sha1.New()
+	sha1.Write(compressed_buffer)
+
+	new_hash := hex.EncodeToString(sha1.Sum(nil))
+
+	object_path := "/home/aoimaru/document/go_project/Recursion/.bakibaki/objects/"
+	fmt.Println(object_path, new_hash[:2], new_hash[2:])
+	if _, err := os.Stat(object_path + new_hash[:2]); err != nil {
+		if err := os.MkdirAll(object_path+new_hash[:2], 1755); err != nil {
+			return "sssssss"
+		}
+	}
+
+	new_writer, _ := os.Create(object_path + new_hash[:2] + "/" + new_hash[2:])
+	defer new_writer.Close()
+
+	count, err := new_writer.Write(compressed_buffer)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Printf("write %d bytes\n", count)
+
+	return new_hash
 }
 
 func RelPath2AbsPath(rel_path string) string {
@@ -180,10 +240,59 @@ func CreateTree(originals []string) {
 		}
 	}
 
+	// for _, tree := range trees {
+	// 	if (*tree).Path == "root" {
+	// 		Walk(tree, "")
+	// 	}
+	// }
+
 	for _, tree := range trees {
 		if (*tree).Path == "root" {
-			Walk(tree, "")
+			_ = Walking(tree)
 		}
+	}
+
+}
+
+func CatFile(hash string) {
+	fmt.Println()
+	fmt.Println("hash:", hash)
+	root_dir := "/home/aoimaru/document/go_project/Recursion/.bakibaki/objects/"
+	tree_path := root_dir + hash[:2] + "/" + hash[2:]
+	f, _ := os.Open(tree_path)
+	defer f.Close()
+
+	buffer := make([]byte, 0)
+	buf := make([]byte, 64)
+	for {
+		n, _ := (*f).Read(buf)
+		if n == 0 {
+			break
+		}
+		buffer = append(buffer, buf...)
+	}
+	// fmt.Println(buffer)
+
+	extracting_buffer := bytes.NewBuffer(buffer)
+	zlib_f, _ := zlib.NewReader(extracting_buffer)
+
+	zlib_buffer, _ := ioutil.ReadAll(zlib_f)
+	// fmt.Println(zlib_buffer)
+
+	entries := make([][]byte, 0)
+	entry := make([]byte, 0)
+
+	for _, zlib_buf := range zlib_buffer {
+		if zlib_buf == 0 {
+			entries = append(entries, entry)
+			entry = make([]byte, 0)
+		}
+		entry = append(entry, zlib_buf)
+	}
+	entries = append(entries, entry)
+
+	for _, entry := range entries {
+		fmt.Println(string(entry))
 	}
 
 }
@@ -201,6 +310,11 @@ func main() {
 		"ARC/1/D.py",
 		"ARC/124/Answer/E.py",
 	}
-	CreateTree(samples)
+	fmt.Println(samples)
+	// CreateTree(samples)
+	CatFile("17557b5615e7e9a05a2fd598c5d3fd07791f0f0a")
+	CatFile("18f885e413a0a63f12dfc2655b69a9c716ef7d1d")
+	CatFile("2bd8b99210a3c17aa5e54bb1e95d3311048b0447")
+	CatFile("d056969fd6da5e11bc43b9afb0c539d61351ad5c")
 
 }
